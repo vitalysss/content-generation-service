@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-deploy-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run static checks
+        run: python -m ruff check src tests
+
+      - name: Run tests
+        run: python -m pytest --cov=app --cov-report=term-missing
+
+      - name: Prepare local configuration
+        run: cp .env.example .env
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build and start the stack
+        run: docker compose up --build --detach
+
+      - name: Wait for the API
+        shell: bash
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://localhost:8000/health | grep --quiet '"status":"ok"'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps --all
+          docker compose logs
+          exit 1
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
